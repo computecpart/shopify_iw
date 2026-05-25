@@ -13,15 +13,18 @@
   </head>
   <body>
     <header class="app-header">
-      <div>
-        <p class="eyebrow">Control de inventario web</p>
-        <h1>Comparador Shopify + IW</h1>
-        <p class="subhead">
-          Cruza SKU, UPC y existencias por sucursal para generar el CSV listo
-          para Shopify y detectar productos a habilitar, deshabilitar o crear.
-        </p>
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true">SI</span>
+        <div>
+          <p class="eyebrow">Control de inventario web</p>
+          <h1>Comparador Shopify + IW</h1>
+          <p class="subhead">
+            Existencias, precios y ofertas en un tablero de revisión.
+          </p>
+        </div>
       </div>
       <div class="header-actions">
+        <span class="status-pill" id="fileStatus">Esperando archivos</span>
         <button class="icon-button" id="resetButton" type="button" title="Limpiar carga">
           <span aria-hidden="true">↺</span>
           <span>Limpiar</span>
@@ -31,12 +34,11 @@
 
     <main class="app-shell">
       <section class="panel upload-panel" aria-labelledby="files-title">
-        <div class="section-heading">
+        <div class="section-heading panel-heading">
           <div>
-            <p class="eyebrow">Paso 1</p>
-            <h2 id="files-title">Archivos</h2>
+            <p class="eyebrow">Entrada</p>
+            <h2 id="files-title">Archivos de trabajo</h2>
           </div>
-          <span class="status-pill" id="fileStatus">Esperando archivos</span>
         </div>
 
         <div class="drop-grid">
@@ -47,7 +49,7 @@
               accept=".csv,text/csv"
               multiple
             />
-            <span class="drop-icon">SKU</span>
+            <span class="drop-icon">01</span>
             <strong>Productos Shopify</strong>
             <small>CSV con Variant SKU y Variant Barcode. Acepta varias partes.</small>
             <span class="file-list" id="productsFiles">Sin archivos</span>
@@ -55,7 +57,7 @@
 
           <label class="drop-zone" for="inventoryInput">
             <input id="inventoryInput" type="file" accept=".csv,text/csv" />
-            <span class="drop-icon">CSV</span>
+            <span class="drop-icon">02</span>
             <strong>Inventario Shopify</strong>
             <small>Export de inventario con sucursal y On hand (new).</small>
             <span class="file-list" id="inventoryFiles">Sin archivo</span>
@@ -67,16 +69,16 @@
               type="file"
               accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             />
-            <span class="drop-icon">IW</span>
+            <span class="drop-icon">03</span>
             <strong>Existencias IW</strong>
             <small>XLSX o CSV con Código de Barras y almacenes.</small>
             <span class="file-list" id="iwFiles">Sin archivo</span>
           </label>
         </div>
 
-        <div class="section-heading compact">
+        <div class="section-heading compact panel-heading">
           <div>
-            <p class="eyebrow">Paso 2</p>
+            <p class="eyebrow">Cruce</p>
             <h2>Mapeo y seguridad</h2>
           </div>
         </div>
@@ -132,6 +134,7 @@
           <span id="progressBar"></span>
         </div>
         <p class="process-message" id="processMessage" role="status"></p>
+        <p class="safety-note">Los reportes descargables no editan precios ni existencias originales.</p>
       </section>
 
       <section class="workspace">
@@ -157,35 +160,67 @@
         <section class="panel results-panel" aria-labelledby="results-title">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Paso 3</p>
-              <h2 id="results-title">Resultados</h2>
+              <p class="eyebrow">Salida</p>
+              <h2 id="results-title">Centro de revisión</h2>
             </div>
             <div class="export-actions">
-              <button id="downloadInventory" type="button" disabled>CSV Shopify</button>
-              <button id="downloadReport" type="button" disabled>Reporte</button>
-              <button id="downloadMissing" type="button" disabled>No creados</button>
+              <button id="downloadInventory" type="button" disabled>
+                <span>Inventario</span>
+                <strong>CSV Shopify</strong>
+              </button>
+              <button id="downloadReport" type="button" disabled>
+                <span>Auditoría</span>
+                <strong>Reporte completo</strong>
+              </button>
+              <button id="downloadPriceReport" type="button" disabled>
+                <span>Precio 4</span>
+                <strong>Reporte precios</strong>
+              </button>
+              <button id="downloadMissing" type="button" disabled>
+                <span>Catálogo</span>
+                <strong>No creados</strong>
+              </button>
             </div>
           </div>
 
           <div class="tabs" role="tablist" aria-label="Vistas de resultados">
-            <button class="tab active" type="button" data-view="actions">Acciones</button>
-            <button class="tab" type="button" data-view="zero">Cero</button>
-            <button class="tab" type="button" data-view="missing">No creados</button>
-            <button class="tab" type="button" data-view="review">Revisión</button>
+            <button class="tab active" type="button" data-view="actions">
+              <span>Acciones</span>
+              <strong data-tab-count="actions">0</strong>
+            </button>
+            <button class="tab" type="button" data-view="prices">
+              <span>Precios</span>
+              <strong data-tab-count="prices">0</strong>
+            </button>
+            <button class="tab" type="button" data-view="zero">
+              <span>Cero</span>
+              <strong data-tab-count="zero">0</strong>
+            </button>
+            <button class="tab" type="button" data-view="missing">
+              <span>No creados</span>
+              <strong data-tab-count="missing">0</strong>
+            </button>
+            <button class="tab" type="button" data-view="review">
+              <span>Revisión</span>
+              <strong data-tab-count="review">0</strong>
+            </button>
           </div>
 
           <div class="table-tools">
-            <input
-              id="searchInput"
-              type="search"
-              placeholder="Buscar por UPC, SKU, producto o sucursal"
-              autocomplete="off"
-            />
+            <label class="search-box" for="searchInput">
+              <span aria-hidden="true">⌕</span>
+              <input
+                id="searchInput"
+                type="search"
+                placeholder="Buscar por UPC, SKU, producto, precio o sucursal"
+                autocomplete="off"
+              />
+            </label>
             <span id="tableCount">Sin datos</span>
           </div>
 
           <div class="table-wrap">
-            <table id="resultsTable">
+            <table id="resultsTable" class="is-empty">
               <thead></thead>
               <tbody>
                 <tr>
