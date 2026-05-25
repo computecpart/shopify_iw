@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Comparador de existencias Shopify + IW</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"
+      defer
+    ></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true">SI</span>
+        <div>
+          <p class="eyebrow">Control de inventario web</p>
+          <h1>Comparador Shopify + IW</h1>
+          <p class="subhead">
+            Existencias, precios y ofertas en un tablero de revisión.
+          </p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <span class="status-pill" id="fileStatus">Esperando archivos</span>
+        <button class="icon-button" id="resetButton" type="button" title="Limpiar carga">
+          <span aria-hidden="true">↺</span>
+          <span>Limpiar</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="panel upload-panel" aria-labelledby="files-title">
+        <div class="section-heading panel-heading">
+          <div>
+            <p class="eyebrow">Entrada</p>
+            <h2 id="files-title">Archivos de trabajo</h2>
+          </div>
+        </div>
+
+        <div class="drop-grid">
+          <label class="drop-zone" for="productsInput">
+            <input
+              id="productsInput"
+              type="file"
+              accept=".csv,text/csv"
+              multiple
+            />
+            <span class="drop-icon">01</span>
+            <strong>Productos Shopify</strong>
+            <small>CSV con Variant SKU y Variant Barcode. Acepta varias partes.</small>
+            <span class="file-list" id="productsFiles">Sin archivos</span>
+          </label>
+
+          <label class="drop-zone" for="inventoryInput">
+            <input id="inventoryInput" type="file" accept=".csv,text/csv" />
+            <span class="drop-icon">02</span>
+            <strong>Inventario Shopify</strong>
+            <small>Export de inventario con sucursal y On hand (new).</small>
+            <span class="file-list" id="inventoryFiles">Sin archivo</span>
+          </label>
+
+          <label class="drop-zone" for="iwInput">
+            <input
+              id="iwInput"
+              type="file"
+              accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            />
+            <span class="drop-icon">03</span>
+            <strong>Existencias IW</strong>
+            <small>XLSX o CSV con Código de Barras y almacenes.</small>
+            <span class="file-list" id="iwFiles">Sin archivo</span>
+          </label>
+        </div>
+
+        <div class="section-heading compact panel-heading">
+          <div>
+            <p class="eyebrow">Cruce</p>
+            <h2>Mapeo y seguridad</h2>
+          </div>
+        </div>
+
+        <div class="mapping-table" aria-label="Mapeo de sucursales">
+          <div class="mapping-row mapping-head">
+            <span>Sucursal Shopify</span>
+            <span>Columna IW</span>
+          </div>
+          <div class="mapping-row">
+            <label for="mapChalchuapa">Sucursal Chalchuapa</label>
+            <select id="mapChalchuapa" data-shopify-location="Sucursal Chalchuapa">
+              <option value="ALMACEN">ALMACEN</option>
+            </select>
+          </div>
+          <div class="mapping-row">
+            <label for="mapSantaAna">Sucursal Santa Ana Independencia</label>
+            <select id="mapSantaAna" data-shopify-location="Sucursal Santa Ana Independencia">
+              <option value="ALMACEN SANTA ANA">ALMACEN SANTA ANA</option>
+            </select>
+          </div>
+          <div class="mapping-row">
+            <label for="mapZarzamora">Sucursal Santa Ana Zarzamora</label>
+            <select id="mapZarzamora" data-shopify-location="Sucursal Santa Ana Zarzamora">
+              <option value="ALMACEN ZARZAMORA">ALMACEN ZARZAMORA</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="options-grid">
+          <label class="check-option">
+            <input id="clearExistingNew" type="checkbox" checked />
+            <span>Limpiar valores previos de On hand (new)</span>
+          </label>
+          <label class="check-option">
+            <input id="clampNegative" type="checkbox" checked />
+            <span>Convertir existencias negativas a 0</span>
+          </label>
+          <label class="check-option">
+            <input id="skuFallback" type="checkbox" checked />
+            <span>Usar SKU como respaldo si falta UPC</span>
+          </label>
+          <label class="check-option">
+            <input id="setUnmatchedZero" type="checkbox" />
+            <span>Poner 0 a Shopify sin coincidencia IW</span>
+          </label>
+        </div>
+
+        <button class="primary-action" id="processButton" type="button">
+          Comparar y generar archivos
+        </button>
+        <div class="progress-track" aria-hidden="true">
+          <span id="progressBar"></span>
+        </div>
+        <p class="process-message" id="processMessage" role="status"></p>
+        <p class="safety-note">Los reportes descargables no editan precios ni existencias originales.</p>
+      </section>
+
+      <section class="workspace">
+        <section class="metrics-grid" id="metricsGrid" aria-label="Resumen">
+          <article class="metric">
+            <span>Variantes Shopify</span>
+            <strong>0</strong>
+          </article>
+          <article class="metric">
+            <span>Filas inventario</span>
+            <strong>0</strong>
+          </article>
+          <article class="metric">
+            <span>Actualizadas</span>
+            <strong>0</strong>
+          </article>
+          <article class="metric attention">
+            <span>Revisar</span>
+            <strong>0</strong>
+          </article>
+        </section>
+
+        <section class="panel results-panel" aria-labelledby="results-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Salida</p>
+              <h2 id="results-title">Centro de revisión</h2>
+            </div>
+            <div class="export-actions">
+              <button id="downloadInventory" type="button" disabled>
+                <span>Inventario</span>
+                <strong>CSV Shopify</strong>
+              </button>
+              <button id="downloadReport" type="button" disabled>
+                <span>Auditoría</span>
+                <strong>Reporte completo</strong>
+              </button>
+              <button id="downloadPriceReport" type="button" disabled>
+                <span>Precio 4</span>
+                <strong>Reporte precios</strong>
+              </button>
+              <button id="downloadMissing" type="button" disabled>
+                <span>Catálogo</span>
+                <strong>No creados</strong>
+              </button>
+            </div>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="Vistas de resultados">
+            <button class="tab active" type="button" data-view="actions">
+              <span>Acciones</span>
+              <strong data-tab-count="actions">0</strong>
+            </button>
+            <button class="tab" type="button" data-view="prices">
+              <span>Precios</span>
+              <strong data-tab-count="prices">0</strong>
+            </button>
+            <button class="tab" type="button" data-view="zero">
+              <span>Cero</span>
+              <strong data-tab-count="zero">0</strong>
+            </button>
+            <button class="tab" type="button" data-view="missing">
+              <span>No creados</span>
+              <strong data-tab-count="missing">0</strong>
+            </button>
+            <button class="tab" type="button" data-view="review">
+              <span>Revisión</span>
+              <strong data-tab-count="review">0</strong>
+            </button>
+          </div>
+
+          <div class="table-tools">
+            <label class="search-box" for="searchInput">
+              <span aria-hidden="true">⌕</span>
+              <input
+                id="searchInput"
+                type="search"
+                placeholder="Buscar por UPC, SKU, producto, precio o sucursal"
+                autocomplete="off"
+              />
+            </label>
+            <span id="tableCount">Sin datos</span>
+          </div>
+
+          <div class="table-wrap">
+            <table id="resultsTable" class="is-empty">
+              <thead></thead>
+              <tbody>
+                <tr>
+                  <td class="empty-state">
+                    Carga los tres archivos y ejecuta la comparación.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
