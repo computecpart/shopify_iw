@@ -2,6 +2,7 @@ const IW_FIELD_ALIASES = {
   barcode: ['Código de Barras', 'Codigo de Barras', 'Código Barras', 'Barcode', 'UPC'],
   code: ['Código', 'Codigo', 'SKU', 'Item'],
   title: ['Nombre Comercial', 'Producto', 'Descripción', 'Descripcion', 'Nombre'],
+  price4: ['Precio 4', 'Price 4', 'Precio4'],
 };
 
 let xlsxReady = false;
@@ -166,6 +167,7 @@ function buildProductIndex(tables) {
   const bySku = new Map();
   const barcodeKeys = new Map();
   const identifierKeys = new Map();
+  const all = [];
   const review = [];
   let variants = 0;
 
@@ -186,13 +188,15 @@ function buildProductIndex(tables) {
       const sku = normalizeSku(get(row, idx, 'Variant SKU') || get(row, idx, 'SKU'));
       const barcodeRaw = get(row, idx, 'Variant Barcode') || get(row, idx, 'Barcode');
       const barcode = cleanIdentifier(barcodeRaw);
+      const priceRaw = get(row, idx, 'Variant Price') || get(row, idx, 'Price / El Salvador');
+      const compareAtRaw = get(row, idx, 'Variant Compare At Price') || get(row, idx, 'Compare At Price / El Salvador');
 
       if (get(row, idx, 'Title')) lastTitle = get(row, idx, 'Title');
       if (get(row, idx, 'Handle')) lastHandle = get(row, idx, 'Handle');
       if (get(row, idx, 'Status')) lastStatus = get(row, idx, 'Status');
       if (get(row, idx, 'Published')) lastPublished = get(row, idx, 'Published');
 
-      if (!sku) return;
+      if (!isShopifyVariantRow({ sku, barcode, priceRaw, compareAtRaw })) return;
       variants += 1;
 
       const product = {
@@ -203,9 +207,27 @@ function buildProductIndex(tables) {
         handle,
         status,
         published,
+        price: parseMoney(priceRaw),
+        compareAtPrice: parseMoney(compareAtRaw),
+        priceRaw,
+        compareAtRaw,
         sourceFile: table.fileName,
         sourceRow: rowIndex + 2,
       };
+      all.push(product);
+
+      if (!sku) {
+        review.push({
+          Tipo: 'SKU Shopify faltante',
+          'UPC / SKU': barcode,
+          Producto: title,
+          Sucursal: '',
+          Detalle: 'La variante aparece en productos Shopify sin SKU; se incluye en precios, pero no puede actualizar inventario por SKU.',
+        });
+        if (barcode) addBarcodeReference(barcodeKeys, barcode, product);
+        if (barcode) addBarcodeReference(identifierKeys, barcode, product);
+        return;
+      }
 
       const existing = bySku.get(keySku(sku));
       if (existing && existing.barcode && barcode && existing.barcode !== barcode) {
@@ -228,7 +250,7 @@ function buildProductIndex(tables) {
     });
   });
 
-  return { bySku, barcodeKeys, identifierKeys, review, variants };
+  return { bySku, barcodeKeys, identifierKeys, all, review, variants };
 }
 
 function buildIwIndex(table, options) {
@@ -236,6 +258,7 @@ function buildIwIndex(table, options) {
   const barcodeHeader = findHeader(table.headers, IW_FIELD_ALIASES.barcode);
   const codeHeader = findHeader(table.headers, IW_FIELD_ALIASES.code);
   const titleHeader = findHeader(table.headers, IW_FIELD_ALIASES.title);
+  const price4Header = findHeader(table.headers, IW_FIELD_ALIASES.price4);
 
   if (!barcodeHeader) {
     throw new Error('No encontré la columna Código de Barras en el archivo IW.');
@@ -249,6 +272,7 @@ function buildIwIndex(table, options) {
     const barcode = cleanIdentifier(get(row, idx, barcodeHeader));
     const code = cleanIdentifier(get(row, idx, codeHeader));
     const title = get(row, idx, titleHeader);
+    const price4Raw = price4Header ? get(row, idx, price4Header) : '';
     const quantities = {};
     let total = 0;
 
@@ -273,6 +297,8 @@ function buildIwIndex(table, options) {
       barcode,
       code,
       title,
+      price4: parseMoney(price4Raw),
+      price4Raw,
       quantities,
       total,
       sourceRow: rowIndex + 2,
@@ -462,12 +488,17 @@ function compareInventory(inventoryTable, products, iw, options) {
     });
   });
 
-  const reportRows = buildReportRows(actions, zeroStock, missingInShopify, review);
+  const priceReport = buildPriceReport(products, iw, options);
+  const priceReportRows = priceReport.map(stripObjectHtml);
+  const priceMetrics = summarizePriceReport(priceReportRows);
+  const reportRows = buildReportRows(actions, zeroStock, missingInShopify, review, priceReportRows);
   const inventoryCsv = tableToCsv(inventoryTable.headers, outputRows);
 
   return {
     inventoryCsv,
     actions,
+    priceReport,
+    priceReportRows,
     zeroStock,
     missingInShopify,
     review,
@@ -484,8 +515,105 @@ function compareInventory(inventoryTable, products, iw, options) {
       actions: actions.length,
       iwRows: iw.rows.length,
       matchedIwRows: matchedIwRows.size,
+      priceRows: priceReport.length,
+      priceMatches: priceMetrics.matches,
+      priceDifferences: priceMetrics.differences,
+      priceZeroIssues: priceMetrics.zeroIssues,
+      saleProducts: priceMetrics.saleProducts,
+      priceReview: priceMetrics.review,
     },
   };
+}
+
+function buildPriceReport(products, iw, options) {
+  return products.all.map((product) => {
+    const match = lookupIwMatch(product.barcode || '', iw.byBarcode, options.skuFallback ? product.sku : '');
+    const iwPrice = match.status === 'matched' ? match.row.price4 : null;
+    const sale = classifySale(product);
+    const comparison = compareMoney(product.price, iwPrice);
+    const state = classifyPriceState(product, match, iwPrice, sale, comparison);
+    const detail = buildPriceDetail(product, match, iwPrice, sale, comparison);
+
+    return {
+      Estado: htmlTag(state.label, state.tone),
+      'UPC Shopify': product.barcode || '',
+      SKU: product.sku || '',
+      Producto: product.title || match.row?.title || product.handle,
+      'Precio 4 IW': formatMoneyCell(iwPrice),
+      'Precio Shopify actual': formatMoneyCell(product.price),
+      'Precio regular Shopify': formatMoneyCell(getRegularShopifyPrice(product)),
+      'Precio oferta Shopify': sale.hasOfferMarker ? formatMoneyCell(product.price) : '',
+      Diferencia: comparison.hasComparison ? formatSignedMoney(comparison.difference) : '',
+      Oferta: sale.label,
+      Detalle: detail,
+      'Código IW': match.row?.code || '',
+      'Producto IW': match.row?.title || '',
+      'Fila IW': match.row?.sourceRow || '',
+      'Archivo Shopify': product.sourceFile || '',
+      'Fila Shopify': product.sourceRow || '',
+    };
+  });
+}
+
+function classifyPriceState(product, match, iwPrice, sale, comparison) {
+  if (!product.price.valid || !product.price.hasValue) return { label: 'Revisar', tone: 'danger' };
+  if (hasZeroPriceIssue(product, iwPrice)) return { label: 'Precio 0', tone: 'danger' };
+  if (match.status === 'ambiguous') return { label: 'Revisar', tone: 'danger' };
+  if (match.status !== 'matched') return { label: 'Sin IW', tone: 'warn' };
+  if (!iwPrice?.valid || !iwPrice.hasValue) return { label: 'Revisar', tone: 'danger' };
+  if (comparison.hasComparison && Math.abs(comparison.difference) > 0.004) return { label: 'Diferencia', tone: 'warn' };
+  if (sale.isRealSale) return { label: 'Oferta', tone: 'info' };
+  return { label: 'OK', tone: 'ok' };
+}
+
+function buildPriceDetail(product, match, iwPrice, sale, comparison) {
+  const details = [];
+
+  if (!product.sku) details.push('Variante sin SKU en Shopify.');
+  if (!product.price.hasValue) details.push('Variant Price esta vacio.');
+  if (product.price.hasValue && !product.price.valid) details.push(`Variant Price no numerico: ${product.price.raw}.`);
+  if (product.price.valid && product.price.amount === 0) details.push('Precio actual Shopify en 0.00.');
+  if (product.compareAtPrice.hasValue && !product.compareAtPrice.valid) {
+    details.push(`Compare At Price no numerico: ${product.compareAtPrice.raw}.`);
+  }
+  if (product.compareAtPrice.valid && product.compareAtPrice.hasValue && product.compareAtPrice.amount === 0) {
+    details.push('Precio regular/compare-at Shopify en 0.00.');
+  }
+  if (iwPrice?.valid && iwPrice.hasValue && iwPrice.amount === 0) details.push('Precio 4 IW en 0.00.');
+
+  if (match.status !== 'matched') {
+    details.push(matchStatusDetail(match.status));
+  } else if (!iwPrice?.hasValue) {
+    details.push('IW no trae Precio 4 para este producto.');
+  } else if (!iwPrice.valid) {
+    details.push(`Precio 4 IW no numerico: ${iwPrice.raw}.`);
+  } else if (comparison.hasComparison && Math.abs(comparison.difference) > 0.004) {
+    details.push(`Diferencia Shopify - IW: ${formatSignedMoney(comparison.difference)}.`);
+  }
+
+  if (sale.label !== 'Sin oferta') details.push(sale.label + '.');
+  return details.join(' ');
+}
+
+function summarizePriceReport(rows) {
+  return rows.reduce(
+    (summary, row) => {
+      const status = row.Estado;
+      if (row['Precio 4 IW'] !== '') summary.matches += 1;
+      if (status === 'Diferencia') summary.differences += 1;
+      if (status === 'Precio 0' || row.Detalle.includes('0.00')) summary.zeroIssues += 1;
+      if (row.Oferta && row.Oferta !== 'Sin oferta') summary.saleProducts += 1;
+      if (!['OK', 'Oferta'].includes(status)) summary.review += 1;
+      return summary;
+    },
+    {
+      matches: 0,
+      differences: 0,
+      zeroIssues: 0,
+      saleProducts: 0,
+      review: 0,
+    }
+  );
 }
 
 function buildZeroRow(group, options) {
@@ -575,11 +703,15 @@ function barcodeCandidateKeys(value) {
   return [...new Set(keys.filter(Boolean))];
 }
 
-function buildReportRows(actions, zeroStock, missingInShopify, review) {
+function buildReportRows(actions, zeroStock, missingInShopify, review, priceReportRows = []) {
   return [
     ...actions.map((row) => ({
       Vista: 'Acciones',
       ...stripObjectHtml(row),
+    })),
+    ...priceReportRows.map((row) => ({
+      Vista: 'Precios',
+      ...row,
     })),
     ...zeroStock.map((row) => ({
       Vista: 'Inventario cero',
@@ -635,6 +767,78 @@ function isShopifyActive(product) {
   return true;
 }
 
+function isShopifyVariantRow(product) {
+  return Boolean(product.sku || product.barcode || stringifyCell(product.priceRaw).trim() || stringifyCell(product.compareAtRaw).trim());
+}
+
+function classifySale(product) {
+  const price = product.price;
+  const compareAt = product.compareAtPrice;
+
+  if (!compareAt.hasValue) {
+    return { label: 'Sin oferta', hasOfferMarker: false, isRealSale: false };
+  }
+
+  if (!compareAt.valid) {
+    return { label: 'Compare-at invalido', hasOfferMarker: true, isRealSale: false };
+  }
+
+  if (!price.hasValue || !price.valid) {
+    return { label: 'Oferta sin precio actual valido', hasOfferMarker: true, isRealSale: false };
+  }
+
+  if (compareAt.amount === 0) {
+    return { label: 'Regular/compare-at en 0.00', hasOfferMarker: true, isRealSale: false };
+  }
+
+  const difference = roundMoney(compareAt.amount - price.amount);
+  if (difference > 0.004) {
+    const percent = compareAt.amount ? Math.round((difference / compareAt.amount) * 100) : 0;
+    return {
+      label: `En oferta (${formatMoneyCell({ amount: difference, hasValue: true, valid: true })} menos, ${percent}%)`,
+      hasOfferMarker: true,
+      isRealSale: true,
+    };
+  }
+
+  if (Math.abs(difference) <= 0.004) {
+    return { label: 'Oferta sin descuento: actual igual al regular', hasOfferMarker: true, isRealSale: false };
+  }
+
+  return { label: 'Compare-at menor que precio actual', hasOfferMarker: true, isRealSale: false };
+}
+
+function getRegularShopifyPrice(product) {
+  return product.compareAtPrice.hasValue ? product.compareAtPrice : product.price;
+}
+
+function compareMoney(shopifyPrice, iwPrice) {
+  if (!shopifyPrice?.hasValue || !shopifyPrice.valid || !iwPrice?.hasValue || !iwPrice.valid) {
+    return { hasComparison: false, difference: 0 };
+  }
+  return {
+    hasComparison: true,
+    difference: roundMoney(shopifyPrice.amount - iwPrice.amount),
+  };
+}
+
+function hasZeroPriceIssue(product, iwPrice) {
+  return Boolean(
+    (product.price.valid && product.price.hasValue && product.price.amount === 0) ||
+      (product.compareAtPrice.valid && product.compareAtPrice.hasValue && product.compareAtPrice.amount === 0) ||
+      (iwPrice?.valid && iwPrice.hasValue && iwPrice.amount === 0)
+  );
+}
+
+function matchStatusDetail(status) {
+  const details = {
+    missing_input: 'No tiene UPC Shopify y no hubo identificador alterno para buscar en IW.',
+    not_found: 'No se encontro coincidencia en IW.',
+    ambiguous: 'El identificador coincide con mas de un producto IW; revision manual necesaria.',
+  };
+  return details[status] || 'No se pudo comparar contra IW.';
+}
+
 function findHeader(headers, aliases) {
   const normalized = new Map(headers.map((header) => [normalizeHeader(header), header]));
   for (const alias of aliases) {
@@ -681,6 +885,47 @@ function parseQuantity(value, options = {}) {
   }
 
   return { quantity, warning };
+}
+
+function parseMoney(value) {
+  const raw = stringifyCell(value).trim();
+  if (!raw) return { raw, amount: null, hasValue: false, valid: true };
+
+  let normalized = raw.replace(/\s/g, '').replace(/[^\d,.-]/g, '');
+  if (normalized.includes(',') && normalized.includes('.')) {
+    normalized = normalized.replace(/,/g, '');
+  } else if (normalized.includes(',') && !normalized.includes('.')) {
+    normalized = normalized.replace(',', '.');
+  }
+
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount)) {
+    return { raw, amount: null, hasValue: true, valid: false };
+  }
+
+  return {
+    raw,
+    amount: roundMoney(amount),
+    hasValue: true,
+    valid: true,
+  };
+}
+
+function roundMoney(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function formatMoneyCell(money) {
+  if (!money?.hasValue) return '';
+  if (!money.valid) return money.raw;
+  return money.amount.toFixed(2);
+}
+
+function formatSignedMoney(value) {
+  const rounded = roundMoney(value);
+  const prefix = rounded > 0 ? '+' : '';
+  return `${prefix}${rounded.toFixed(2)}`;
 }
 
 function cleanIdentifier(value) {
