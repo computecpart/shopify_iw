@@ -5,6 +5,8 @@ Web estática en HTML, CSS y JavaScript puro para cruzar:
 - CSV de productos Shopify, una o varias partes.
 - CSV de inventario Shopify.
 - XLSX o CSV de existencias IW.
+- Precio 4 de IW contra el precio vigente de Shopify, incluyendo ofertas y
+  precios en cero para revisión manual.
 
 ## Uso
 
@@ -15,7 +17,9 @@ Web estática en HTML, CSS y JavaScript puro para cruzar:
    - `Sucursal Santa Ana Independencia` -> `ALMACEN SANTA ANA`
    - `Sucursal Santa Ana Zarzamora` -> `ALMACEN ZARZAMORA`
 4. Ejecuta `Comparar y generar archivos`.
-5. Descarga el CSV de Shopify y súbelo desde el importador de inventario.
+5. Revisa las vistas de existencias y precios.
+6. Descarga el CSV de Shopify si quieres actualizar inventario, o los reportes
+   de revisión si solo necesitas auditar precios.
 
 Para probar localmente:
 
@@ -32,4 +36,8 @@ Luego abre `http://127.0.0.1:8765/index.html`.
 - Los UPC se comparan normalizados, quitando apostrofes, espacios, guiones y ceros iniciales para cubrir los casos donde IW perdió el cero inicial.
 - Si no hay coincidencia segura, por defecto se deja `On hand (new)` vacío para evitar sobrescrituras accidentales.
 - Las existencias negativas de IW se convierten a `0` por defecto porque Shopify requiere cantidades enteras para el importador.
+- El reporte de precios es solo informativo: compara `Precio 4` de IW contra
+  `Variant Price` de Shopify, muestra `Variant Compare At Price` como precio
+  regular cuando existe, y marca ofertas reales, ofertas sin descuento y
+  precios `0.00`.
 - Cuando la página corre desde un servidor, el cruce se hace en segundo plano con `inventory-worker.js` para soportar archivos grandes sin congelar la interfaz.
